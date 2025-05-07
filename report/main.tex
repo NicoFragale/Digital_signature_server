@@ -1,0 +1,79 @@
+\documentclass[12pt]{article}
+
+\usepackage{stmaryrd}
+\usepackage{listings}
+\usepackage{array}
+\usepackage{xcolor}  % For custom colors
+\usepackage{graphicx} % Required for including images
+\usepackage{amsmath}
+\usepackage[a4paper, margin=1.2in]{geometry} % Adjust margins
+\usepackage{parskip}
+\usepackage{tikz}
+\usepackage{textcomp}
+\usepackage{amsmath, amssymb}
+\usepackage[colorlinks=true, linkcolor=black, citecolor=black, urlcolor=black]{hyperref}
+\usepackage{titlesec} % To customize section title spacing
+\usepackage{listings}
+\lstdefinelanguage{wat}{
+    morekeywords={module,func,export,param,result,local.get,i32.mul,i32.const,i32.add},
+    sensitive=true,
+    morecomment=[l]{;;},
+    morestring=[b]"
+}
+\lstset{ % Configurazione dello stile del codice
+  language=Python,           % Linguaggio di programmazione
+  basicstyle=\ttfamily\small,% Font monospaziato piccolo
+  keywordstyle=\color{blue}, % Colore per le parole chiave
+  commentstyle=\color{gray}, % Colore per i commenti
+  stringstyle=\color{red},   % Colore per le stringhe
+  numbers=left,              % Numerazione delle righe a sinistra
+  numberstyle=\tiny,         % Stile dei numeri di riga
+  stepnumber=1,              % Ogni riga numerata
+  showstringspaces=false,    % Non mostrare spazi nelle stringhe
+  frame=lines,               % Bordo sopra e sotto
+  caption=Code Example, % Titolo del blocco di codice
+  tabsize=4                  % Spaziatura dei tab
+}
+
+\titleformat{\section}[block]{\normalfont\large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}[runin]{\normalfont\normalsize\bfseries}{\thesubsection}{1em}{}
+\usepackage{fancyhdr} % For headers
+\setlength{\headheight}{14.5pt}  % Aumenta l'altezza dell'intestazione
+\pagestyle{fancy}
+\sloppy
+% Title
+\title{\vspace{-2cm} \textbf{\Huge FOC project} \vspace{-0.5cm}}
+
+\author{\textbf{Nicolò Mariano Fragale, Federico Rossetti} \vspace{-0.5cm}}
+
+\date{\textbf{March 2025}}
+
+\begin{document}
+
+% First page with logo, title, and author info
+\begin{titlepage}
+    \centering
+    \includegraphics[width=0.8\textwidth, height=6cm]{img/Logo-UNIIPI-nero.png} \\[3cm]  % Include the logo in .jpg format
+    \vspace{1cm}
+    \textbf{\huge University of Pisa} \\[0.5cm]
+    \textit{\LARGE Department of Information Engineering} \\[2cm]
+    \rule{8cm}{0.5pt} \\[0.5cm]
+    \textbf{\LARGE FOC project} \\[0.5cm]
+    \rule{8cm}{0.5pt} \\[2cm]
+    \textit{ Nicolò Mariano Fragale, Federico Rossetti} \\
+    \textbf{May 2025}
+    \vfill
+\end{titlepage}
+
+\newpage
+
+% Table of contents
+\tableofcontents
+\newpage
+
+
+
+% Insert the content of your sections
+\input{server.tex}
+
+\end{document}
