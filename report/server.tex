@@ -1,1 +1,21 @@
 \section{Digital Signature Server}
+
+\subsection{\_\_init\_\_}
+
+Questa è la funzione costruttore della classe.
+\begin{itemize}
+    \item \textbf{host='0.0.0.0':} L’indirizzo IP su cui il server ascolterà le connessioni.  Il valore '0.0.0.0' indica che il server sarà accessibile su tutte le interfacce di rete disponibili del computer (locale, LAN, Internet).
+    \item \textbf{port=5000:} La porta su cui il server ascolterà le connessioni in ingresso. 
+    \item \textbf{certfile='server-cert.pem'}
+    \item \textbf{keyfile='server-key.pem'}
+\end{itemize} 
+
+\begin{itemize}
+    \item \textbf{self.server\_socket = socket.socket(...): } Crea un nuovo socket TCP/IP.
+    \begin{itemize}
+        \item \textbf{socket.AF\_INET: } Specifica che il server utilizzerà l’IPv4 per la comunicazione di rete.
+        \item \textbf{socket.SOCK\_STREAM: }  Indica che il socket è di tipo stream (flusso)
+    \end{itemize}
+    \item \textbf{self.server\_socket.bind(...): } Associa il socket a una porta e un indirizzo specifici sul server, (0.0.0.0 e 5000).
+    \item \textbf{self.server\_socket.listen(5): } unghezza massima della coda di connessioni in attesa.
+\end{itemize}
