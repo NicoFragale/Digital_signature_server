@@ -7,7 +7,7 @@ class DigitalSignatureSocketServer:
     Classe di base per la gestione delle connessioni sicure.
     """
 
-    def __init__(self, host='localhost', port=5000, certfile='server-cert.pem', keyfile='server-key.pem'):
+    def __init__(self, host='localhost', port=5000, certfile="tls/server-cert.pem", keyfile="tls/server-key.pem"):
         """
         Inizializza il server con socket e SSL.
         
