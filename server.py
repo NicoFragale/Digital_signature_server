@@ -1,20 +1,21 @@
-import os, socket, json, sys
-from typing import Tuple
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
-from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption, PublicFormat, load_pem_public_key, load_pem_private_key
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+import os, socket, json, sys # Librerie per utilizzare le utility di sistema, rete tcp, Json e gestione dei processi 
+from typing import Tuple #Per annotare i ritorni di funzioni 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey #chiavi per verificare e firmare, utili per l'autenticazione del server 
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey # chiavi effimere per lo scambio del segreto condiviso (g^b) visto che si richiede il PFS 
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption, PublicFormat, load_pem_public_key, load_pem_private_key #serve a serializzare e deserializzare le chiavi pem per salvarle e leggerle 
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF # per derivare la chiave di sessione prende in input un segreto iniziale un salt e i metadati e deriviamo la chiave per la cifratura simmetrica 
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM #cifrario AES GCM (consigliato da gpt) utilizza l'AES (quindi utile per creare la chiave simmetrica con cui cifrare il traffico), a
+#GCM (Galois/Counter Mode) trasforma la chiave simmetrica in un cifrario a flusso e integra un meccanismo di autenticazione perchè il CTR assicura confidenzialità, il campo di Galois viene utilizzato per creare un tag di autenticazione per assicurare integrità e autenticità
 
-from shared import b64e, b64d, send_json, recv_json, randbytes, sha256
-
+from shared import b64e, b64d, send_json, recv_json, randbytes, sha256 #libreria con le utility in cui abbiamo il framing (utilizzato per impostare l'inizio e fine del messaggio), il nonce random e dove calcoliamo gli hash 
+#Directory per conservare le chiavi pubbliche e private del server 
 KEYS_DIR = "keys"
 PRIV_PATH = os.path.join(KEYS_DIR, "server_signing_private.pem")
 PUB_PATH  = os.path.join(KEYS_DIR, "server_signing_public.pem")
 
-PROTO = b"DSS/1"  # protocol id per il transcript
-
+PROTO = b"DSS/1"  # protocol id per il transcript -> cioè tutti i messaggi scambianti durante l'handshake
+#questa è una funzione che controlla se la cartella keys esiste e se le chiavi sono presenti
 def ensure_server_signing_keys() -> Tuple[Ed25519PrivateKey, bytes]:
     os.makedirs(KEYS_DIR, exist_ok=True)
     if not os.path.exists(PRIV_PATH) or not os.path.exists(PUB_PATH):
@@ -38,17 +39,17 @@ def ensure_server_signing_keys() -> Tuple[Ed25519PrivateKey, bytes]:
         server_pub_pem = f.read()
 
     return sk, server_pub_pem
-
+#hkdf_derive: deriva il numero di byte di length da shared_secret utilizzando HKDF, il salt è la concatenazione di Nc e Ns (nonce randomici di 16 byte)
 def hkdf_derive(shared_secret: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
     return HKDF(algorithm=hashes.SHA256(), length=length, salt=salt, info=info).derive(shared_secret)
-
+#build_transcript: costruisce il transcript (che verrà hashto e firmato) per il messaggio di handshake, lega le chiavi e il nonce per evitare il MITM
 def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes) -> bytes:
     # Ordine fisso per prevenire ambiguità
     return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
-
+#run_server: avvia il server e gestisce le connessioni in arrivo
 def run_server(host="127.0.0.1", port=5001):
-    sk_sign, server_pub_pem = ensure_server_signing_keys()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sk_sign, server_pub_pem = ensure_server_signing_keys() #ci assicuriamo che ci siano le chiavi 
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #si costruisce il socket 
     sock.bind((host, port))
     sock.listen(5)
     print(f"[server] In ascolto su {host}:{port}")
@@ -58,26 +59,29 @@ def run_server(host="127.0.0.1", port=5001):
             print("[server] Connessione:", addr)
             try:
                 # --- 1) Ricevi ClientHello ---
-                hello = recv_json(conn)
+                hello = recv_json(conn) #attende il ClientHello per iniziare l' handshake 
+                print("[server] Ricevuto ClientHello:", hello)
                 if not hello or hello.get("type") != "ClientHello":
                     conn.close(); continue
 
-                client_pub_bytes = b64d(hello["dh_pub"])
+                client_pub_bytes = b64d(hello["dh_pub"]) #estrae la chiave pubblica del client (g^a) oltre al suo nonce (Nc)
                 Nc = b64d(hello["nonce"])
                 client_pub = X25519PublicKey.from_public_bytes(client_pub_bytes)
 
                 # --- 2) Genera ECDH effimero e rispondi con ServerHello firmato ---
-                server_eph = X25519PrivateKey.generate()
+                server_eph = X25519PrivateKey.generate() #genera la chiave effimera del server (g^b)
                 server_pub_bytes = server_eph.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-                Ns = randbytes(16)
+                Ns = randbytes(16) #genera il nonce del server (Ns)
 
                 # Shared secret
-                shared = server_eph.exchange(client_pub)
+                shared = server_eph.exchange(client_pub) # calcola il segreto condiviso
 
-                transcript = build_transcript(client_pub_bytes, server_pub_bytes, Nc, Ns)
+                #Costruiamo il transcript, lo hashiamo e lo firimiamo per evitare il MITM
+                transcript = build_transcript(client_pub_bytes, server_pub_bytes, Nc, Ns) 
                 t_hash = sha256(transcript)
                 signature = sk_sign.sign(t_hash)
 
+                # Invia la risposta al client, chiave pubblica, Ns e firma
                 reply = {
                     "type": "ServerHello",
                     "dh_pub": b64e(server_pub_bytes),
@@ -86,8 +90,9 @@ def run_server(host="127.0.0.1", port=5001):
                     # opzionale: non serve inviare la chiave pubblica di firma; il client la ha offline
                 }
                 send_json(conn, reply)
-
+                print("[server] Inviato ServerHello:", reply)
                 # --- 3) Deriva chiavi sessione e conferma chiave ---
+                # Serve per confermare che il client ha ricevuto la stessa chiave del server 
                 # K = HKDF(shared, salt=Nc||Ns, info=hash(transcript))
                 salt = Nc + Ns
                 info = t_hash
@@ -96,6 +101,7 @@ def run_server(host="127.0.0.1", port=5001):
 
                 # Attesa ClientFinish (AEAD conferma lato client)
                 cf = recv_json(conn)
+                print("[server] Ricevuto ClientFinish:", cf)
                 if not cf or cf.get("type") != "ClientFinish":
                     conn.close(); continue
 
@@ -115,7 +121,7 @@ def run_server(host="127.0.0.1", port=5001):
                 aad2 = sha256(b"server-finish" + info)
                 ct2 = aesgcm.encrypt(iv2, b"OK-SF", aad2)
                 send_json(conn, {"type": "ServerFinish", "iv": b64e(iv2), "ct": b64e(ct2)})
-
+                print(send_json)
                 print("[server] Handshake completato. Canale sicuro attivo.")
 
                 # =========================
@@ -143,6 +149,7 @@ def run_server(host="127.0.0.1", port=5001):
                     aad = sha256(b"app|" + info + seq.to_bytes(8, "big") + nonce_app)
                     try:
                         plaintext = AESGCM(K).decrypt(iv, ct, aad)
+                        print("[server] Messaggio applicativo ricevuto:", plaintext)
                     except Exception:
                         print("[server] AEAD decrypt fallita.")
                         continue

@@ -17,6 +17,7 @@ def hkdf_derive(shared_secret: bytes, salt: bytes, info: bytes, length: int = 32
 def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes) -> bytes:
     return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
 
+#avvio del client 
 def run_client(host="127.0.0.1", port=5001):
     # 1) Carica chiave pubblica di firma del server (distribuita offline)
     with open(SERVER_PUB_PATH, "rb") as f:
@@ -32,11 +33,15 @@ def run_client(host="127.0.0.1", port=5001):
         client_eph = X25519PrivateKey.generate()
         client_pub_bytes = client_eph.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         Nc = randbytes(16)
+        # Invia ClientHello con chiave pubblica (g^a) e nonce (Nc)
         send_json(sock, {"type": "ClientHello", "dh_pub": b64e(client_pub_bytes), "nonce": b64e(Nc)})
-
+        print("[client] Inviato ClientHello con chiave pubblica e nonce.", send_json)
         # --- Ricevi ServerHello ---
-        hello = recv_json(sock)
-        assert hello and hello.get("type") == "ServerHello", "Handshake fallito (ServerHello)."
+        hello = recv_json(sock) #riceve il messaggio di ServerHello
+        print("[client] Ricevuto ServerHello:", hello)
+        assert hello and hello.get("type") == "ServerHello", "Handshake fallito (ServerHello)." # verifica che il messaggio sia corretto
+        
+        # Estrae dal messaggio la chiave pubblica del server, il Nonce e la firma 
         server_pub_bytes = b64d(hello["dh_pub"])
         Ns = b64d(hello["nonce"])
         signature = b64d(hello["signature"])
@@ -60,9 +65,10 @@ def run_client(host="127.0.0.1", port=5001):
         aad = sha256(b"client-finish" + info)
         ct = aesgcm.encrypt(iv, b"OK-CF", aad)
         send_json(sock, {"type": "ClientFinish", "iv": b64e(iv), "ct": b64e(ct)})
-
+        print("[client] Inviato ClientFinish.", send_json)
         # Attendi ServerFinish
         sf = recv_json(sock)
+        print("[client] Ricevuto ServerFinish:", sf)
         assert sf and sf.get("type") == "ServerFinish", "Handshake fallito (ServerFinish)."
         iv2 = b64d(sf["iv"]); ct2 = b64d(sf["ct"])
         aad2 = sha256(b"server-finish" + info)
