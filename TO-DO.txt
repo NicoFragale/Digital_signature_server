@@ -1,0 +1,60 @@
+Fase 1 – Analisi e specifiche
+
+    -Studiare bene i requisiti della consegna.
+
+    -Scrivere un documento iniziale con:
+
+    -Attori coinvolti (utente, DSS).
+
+    -Vincoli (registrazione offline, chiavi private cifrate, password cambiata al primo login).
+
+    -Proprietà di sicurezza richieste (PFS, integrità, autenticazione, non-malleabilità, anti-replay).
+
+Fase 2 – Protocollo di autenticazione e canale sicuro
+
+-  Disegnare il protocollo di autenticazione:
+
+    -Utente → DSS: autenticazione con password.
+
+    -DSS → Utente: autenticazione con chiave pubblica.
+
+    -Definire come viene stabilito il canale sicuro (es. handshake tipo TLS, con scambio di chiavi effimere per PFS).
+
+    -Specificare i meccanismi di protezione (MAC o firme per integrità, nonce/timestamp per anti-replay, cifratura dei messaggi).
+
+Fase 3 – Definizione delle operazioni DSS
+
+    -Progettare i messaggi e i passi per ciascuna operazione:
+
+    -CreateKeys: richiesta utente → risposta DSS con conferma.
+
+    -SignDoc: invio documento → ritorno firma digitale.
+
+    -GetPublicKey: richiesta chiave pubblica → ritorno chiave.
+
+    -DeleteKeys: richiesta eliminazione → conferma.
+
+    -Definire il formato dei messaggi (JSON, ASN.1, XML, ecc.).
+
+Fase 4 – Gestione delle chiavi
+
+    -Stabilire come il server genera, conserva e protegge le chiavi:
+
+    -Crittografia delle chiavi private lato server.
+
+    -Politiche di aggiornamento e cancellazione.
+
+    -Vincolo: se cancellata, nuova registrazione solo offline.
+
+
+Fase 5 – Documentazione finale
+
+    -Scrivere il report finale con:
+
+    -Specifiche e design choices (soprattutto sull’autenticazione e canale sicuro).
+
+    -Formato dei messaggi scambiati.
+
+    -Sequence diagrams per ogni operazione.
+
+    -Motivazioni delle scelte fatte (es. perché un certo algoritmo, perché un certo formato).
