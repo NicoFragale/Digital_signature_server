@@ -149,60 +149,93 @@ def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes)
     return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
 
 
-#run_server: avvia il server e gestisce le connessioni in arrivo
 def run_server(host="127.0.0.1", port=5001):
-    sk_sign, server_pub_pem = ensure_server_signing_keys() #ci assicuriamo che ci siano le chiavi 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #si costruisce il socket 
+    """
+    Avvia il server DSS e gestisce connessioni sicure con i client.
+
+    Funzioni principali:
+    1. Carica o genera la coppia di chiavi Ed25519 del server (per autenticazione).
+    2. Crea un socket TCP in ascolto sul `host:port`.
+    3. Per ogni client:
+        - Esegue l'handshake sicuro:
+            * Riceve ClientHello (chiave DH effimera e nonce Nc).
+            * Genera chiave DH effimera del server + nonce Ns.
+            * Calcola shared secret via X25519.
+            * Costruisce il transcript, ne calcola hash e firma con Ed25519.
+            * Invia ServerHello (chiave DH, nonce, firma).
+            * Deriva chiave di sessione K con HKDF(shared, Nc||Ns, hash(transcript)).
+            * Riceve ClientFinish cifrato (verifica che il client conosce K).
+            * Invia ServerFinish cifrato (conferma lato server).
+        - Se handshake completato, entra nel loop di messaggi applicativi cifrati:
+            * Decifra messaggi usando AES-GCM con AAD legata a transcript, seq, nonce.
+            * Applica controlli anti-replay (seq crescente, nonce unico).
+            * Esegue logica applicativa (PING→PONG, QUIT→BYE, echo).
+            * Risponde cifrando con la stessa chiave K.
+    4. Supporta interruzione con CTRL+C e chiusura ordinata del socket.
+
+    Parametri:
+        host (str): indirizzo IP su cui ascoltare (default: 127.0.0.1).
+        port (int): porta TCP su cui ascoltare (default: 5001).
+    """
+
+    # 1) Assicuriamoci che le chiavi Ed25519 del server esistano
+    sk_sign, server_pub_pem = ensure_server_signing_keys()
+
+    # 2) Creiamo il socket TCP
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((host, port))
     sock.listen(5)
     print(f"[server] In ascolto su {host}:{port}")
+
     try:
         while True:
+            # 3) Accetta un client
             conn, addr = sock.accept()
             print("[server] Connessione:", addr)
             try:
-                # --- 1) Ricevi ClientHello ---
-                hello = recv_json(conn) #attende il ClientHello per iniziare l' handshake 
+                # --- HANDSHAKE ---
+
+                # Riceve ClientHello: deve contenere la chiave DH effimera e un nonce Nc
+                hello = recv_json(conn)
                 print("[server] Ricevuto ClientHello:", hello)
                 if not hello or hello.get("type") != "ClientHello":
                     conn.close(); continue
 
-                client_pub_bytes = b64d(hello["dh_pub"]) #estrae la chiave pubblica del client (g^a) oltre al suo nonce (Nc)
-                Nc = b64d(hello["nonce"])
+                client_pub_bytes = b64d(hello["dh_pub"])   # chiave pubblica effimera del client (g^a)
+                Nc = b64d(hello["nonce"])                  # nonce del client
                 client_pub = X25519PublicKey.from_public_bytes(client_pub_bytes)
 
-                # --- 2) Genera ECDH effimero e rispondi con ServerHello firmato ---
-                server_eph = X25519PrivateKey.generate() #genera la chiave effimera del server (g^b)
+                # Genera chiave DH effimera del server (g^b) e nonce Ns
+                server_eph = X25519PrivateKey.generate()
                 server_pub_bytes = server_eph.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-                Ns = randbytes(16) #genera il nonce del server (Ns)
+                Ns = randbytes(16)
 
-                # Shared secret
-                shared = server_eph.exchange(client_pub) # calcola il segreto condiviso
+                # Calcola shared secret con X25519: (g^a)^b
+                shared = server_eph.exchange(client_pub)
 
-                #Costruiamo il transcript, lo hashiamo e lo firimiamo per evitare il MITM
-                transcript = build_transcript(client_pub_bytes, server_pub_bytes, Nc, Ns) 
+                # Costruisce transcript, lo hasha e lo firma con Ed25519
+                transcript = build_transcript(client_pub_bytes, server_pub_bytes, Nc, Ns)
                 t_hash = sha256(transcript)
                 signature = sk_sign.sign(t_hash)
 
-                # Invia la risposta al client, chiave pubblica, Ns e firma
+                # Invia ServerHello con chiave DH del server, nonce Ns e firma
                 reply = {
                     "type": "ServerHello",
                     "dh_pub": b64e(server_pub_bytes),
                     "nonce": b64e(Ns),
                     "signature": b64e(signature),
-                    # opzionale: non serve inviare la chiave pubblica di firma; il client la ha offline
+                    # Non serve inviare la chiave pubblica di firma (il client la ha offline)
                 }
                 send_json(conn, reply)
                 print("[server] Inviato ServerHello:", reply)
-                # --- 3) Deriva chiavi sessione e conferma chiave ---
-                # Serve per confermare che il client ha ricevuto la stessa chiave del server 
-                # K = HKDF(shared, salt=Nc||Ns, info=hash(transcript))
+
+                # Deriva chiave di sessione con HKDF(shared, salt=Nc||Ns, info=hash(transcript))
                 salt = Nc + Ns
                 info = t_hash
-                K = hkdf_derive(shared, salt, info, 32)   # 256 bit
+                K = hkdf_derive(shared, salt, info, 32)   # AES-256
                 aesgcm = AESGCM(K)
 
-                # Attesa ClientFinish (AEAD conferma lato client)
+                # Riceve ClientFinish cifrato: serve a confermare che il client conosce K
                 cf = recv_json(conn)
                 print("[server] Ricevuto ClientFinish:", cf)
                 if not cf or cf.get("type") != "ClientFinish":
@@ -219,35 +252,35 @@ def run_server(host="127.0.0.1", port=5001):
                     print("[server] Conferma client fallita, chiudo.")
                     conn.close(); continue
 
-                # Invia ServerFinish
+                # Invia ServerFinish: conferma lato server della chiave
                 iv2 = os.urandom(12)
                 aad2 = sha256(b"server-finish" + info)
                 ct2 = aesgcm.encrypt(iv2, b"OK-SF", aad2)
                 send_json(conn, {"type": "ServerFinish", "iv": b64e(iv2), "ct": b64e(ct2)})
-                print(send_json)
                 print("[server] Handshake completato. Canale sicuro attivo.")
 
-                # =========================
-                #  MESSAGGI APPLICATIVI
-                # =========================
-                last_seq = 0
-                seen_nonces = set()
+                # --- LOOP APPLICATIVO ---
+                last_seq = 0           # ultimo seq visto (per controllare ordine)
+                seen_nonces = set()    # nonces già usati (per anti-replay)
+
                 while True:
                     msg = recv_json(conn)
                     if not msg:
                         break
 
+                    # Controllo ordine dei messaggi (seq deve crescere)
                     seq = msg.get("seq", 0)
                     if seq <= last_seq:
-                        # anti-replay (seq non crescente)
                         continue
                     last_seq = seq
 
+                    # Controllo unicità del nonce
                     nonce_app = b64d(msg["nonce"])
                     if nonce_app in seen_nonces:
                         continue
                     seen_nonces.add(nonce_app)
 
+                    # Decifra il messaggio applicativo con AES-GCM
                     iv = b64d(msg["iv"]); ct = b64d(msg["ct"])
                     aad = sha256(b"app|" + info + seq.to_bytes(8, "big") + nonce_app)
                     try:
@@ -257,30 +290,41 @@ def run_server(host="127.0.0.1", port=5001):
                         print("[server] AEAD decrypt fallita.")
                         continue
 
-                    # Esempio: echo sicuro
+                    # Logica applicativa base (esempio)
                     if plaintext == b"PING":
                         resp = b"PONG"
                     elif plaintext == b"QUIT":
-                        resp = b"BYE"; 
+                        resp = b"BYE"
                         # invio risposta e poi chiudo
                     else:
-                        # placeholder per integrazione: Login/SignDoc/etc
+                        # placeholder: qui andranno Login, CreateKeys, SignDoc, ecc.
                         resp = b"ECHO:" + plaintext
 
+                    # Invia la risposta cifrata
                     ivr = os.urandom(12)
                     ctr = AESGCM(K).encrypt(ivr, resp, aad)
-                    send_json(conn, {"seq": seq, "iv": b64e(ivr), "ct": b64e(ctr), "nonce": b64e(nonce_app)})
+                    send_json(conn, {
+                        "seq": seq,
+                        "iv": b64e(ivr),
+                        "ct": b64e(ctr),
+                        "nonce": b64e(nonce_app)
+                    })
 
+                    # Se il messaggio era QUIT, chiudiamo la connessione
                     if plaintext == b"QUIT":
                         break
 
             finally:
+                # Assicura la chiusura della connessione client
                 conn.close()
+
     except KeyboardInterrupt:
         print("\n[server] Stop richiesto.")
     finally:
+        # Chiude il socket principale
         sock.close()
         print("[server] Chiuso.")
-        
+
+
 if __name__ == "__main__":
     run_server()
