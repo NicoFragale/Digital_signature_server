@@ -309,6 +309,11 @@ INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmtt12.tfm
 INPUT ./server.tex
 INPUT ./server.tex
 INPUT server.tex
+INPUT ./autenticazione.tex
+INPUT ./autenticazione.tex
+INPUT autenticazione.tex
+INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmtt8.tfm
+INPUT /usr/local/texlive/2024/texmf-dist/fonts/tfm/public/cm/cmtt8.tfm
 INPUT main.aux
 INPUT ./main.out
 INPUT ./main.out
