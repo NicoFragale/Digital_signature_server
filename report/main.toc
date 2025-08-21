@@ -1,2 +1,11 @@
-\contentsline {section}{\numberline {1}Digital Signature Server}{2}{section.1}%
-\contentsline {subsection}{\numberline {1.1}\_\_init\_\_}{2}{subsection.1.1}%
+\contentsline {section}{\numberline {1}Analisi DSS}{2}{section.1}%
+\contentsline {paragraph}{Obiettivo del sistema}{2}{section.1}%
+\contentsline {paragraph}{Registrazione iniziale (off-line) e credenziali}{2}{section.1}%
+\contentsline {paragraph}{Canale sicuro e autenticazione}{2}{section.1}%
+\contentsline {paragraph}{Operazioni esposte dal servizio}{2}{section.1}%
+\contentsline {paragraph}{Gestione e protezione delle chiavi}{3}{Item.4}%
+\contentsline {paragraph}{Ordine operativo (flusso tipico coerente con la consegna)}{3}{Item.4}%
+\contentsline {paragraph}{Vincoli e requisiti da rispettare}{3}{Item.11}%
+\contentsline {paragraph}{Contenuti obbligatori della relazione}{4}{Item.11}%
+\contentsline {section}{\numberline {2}Digital Signature Server}{5}{section.2}%
+\contentsline {subsection}{\numberline {2.1}\_\_init\_\_}{5}{subsection.2.1}%
