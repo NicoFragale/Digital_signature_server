@@ -25,7 +25,7 @@
 \contentsline {subsection}{\numberline {3.3}Sintesi}{8}{subsection.3.3}%
 \contentsline {section}{\numberline {4}Flusso della comunicazione: descrizione lineare e schemi}{9}{section.4}%
 \contentsline {subsection}{\numberline {4.1}Obiettivo e precondizioni}{9}{subsection.4.1}%
-\contentsline {subsection}{\numberline {4.2}Handshake: negoziazione, autenticazione del server, derivazione di $K$}{9}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.2}Handshake: negoziazione, autenticazione del server, derivazione di K}{9}{subsection.4.2}%
 \contentsline {paragraph}{Esito dell'handshake.}{10}{table.2}%
 \contentsline {subsection}{\numberline {4.3}Fase applicativa: confidenzialità, integrità e anti-replay}{10}{subsection.4.3}%
 \contentsline {subsection}{\numberline {4.4}Mappa concettuale delle operazioni}{10}{subsection.4.4}%

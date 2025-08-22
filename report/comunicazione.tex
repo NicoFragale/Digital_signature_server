@@ -1,8 +1,3 @@
-% --- Preambolo consigliato (aggiungi se usi il diagramma/tabella) ---
-% \usepackage{booktabs}   % per tabelle pulite
-% \usepackage{array}      % colonne p{...}
-% \usepackage{msc}        % per il diagramma di sequenza (opzionale)
-
 \section{Flusso della comunicazione: descrizione lineare e schemi}
 
 Questa sezione descrive in modo lineare come client e server instaurano il canale sicuro e come avviene lo scambio dei messaggi applicativi, senza riportare codice. I riferimenti ai ``componenti logici'' (es.\ \emph{ClientHello}, \emph{ServerHello}, \emph{Transcript}, \emph{HKDF}, \emph{AES-GCM}) corrispondono alle parti omonime implementate nel progetto.
@@ -13,7 +8,7 @@ Questa sezione descrive in modo lineare come client e server instaurano il canal
   \item \textbf{Precondizioni:} l'utente possiede la \textbf{chiave pubblica Ed25519 del server} (distribuita off-line in fase di registrazione).
 \end{itemize}
 
-\subsection{Handshake: negoziazione, autenticazione del server, derivazione di $K$}
+\subsection{Handshake: negoziazione, autenticazione del server, derivazione di K}
 \begin{enumerate}
   \item \textbf{Caricamento chiave del server (lato client).} Il client carica la chiave pubblica Ed25519 del DSS (ottenuta off-line). Servirà a verificare la firma del server.
   \item \textbf{Connessione TCP.} Il client apre una connessione verso il DSS; il server accetta.
