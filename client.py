@@ -1,4 +1,11 @@
 import os, socket
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key, Encoding, PublicFormat
@@ -96,11 +103,11 @@ def run_client(host="127.0.0.1", port=5001):
 
         # Invia ClientHello con chiave pubblica DH (g^a) e nonce (Nc)
         send_json(sock, {"type": "ClientHello", "dh_pub": b64e(client_pub_bytes), "nonce": b64e(Nc)})
-        print("[client] Inviato ClientHello con chiave pubblica e nonce.", send_json)
+        logging.info("[client] Inviato ClientHello con chiave pubblica e nonce.", send_json)
         
         # --- Ricevi ServerHello ---
         hello = recv_json(sock) #riceve il messaggio di ServerHello
-        print("[client] Ricevuto ServerHello:", hello)
+        logging.info("[client] Ricevuto ServerHello:", hello)
         assert hello and hello.get("type") == "ServerHello", "Handshake fallito (ServerHello)." # verifica che il messaggio sia corretto
         
         # Estrae la pubblica DH del server (g^b), il nonce Ns e la firma Ed25519
@@ -128,18 +135,18 @@ def run_client(host="127.0.0.1", port=5001):
         aad = sha256(b"client-finish" + info)
         ct = aesgcm.encrypt(iv, b"OK-CF", aad)
         send_json(sock, {"type": "ClientFinish", "iv": b64e(iv), "ct": b64e(ct)})
-        print("[client] Inviato ClientFinish.", send_json)
+        logging.info("[client] Inviato ClientFinish.", send_json)
         
         # Attendi ServerFinish e verifica
         sf = recv_json(sock)
-        print("[client] Ricevuto ServerFinish:", sf)
+        logging.info("[client] Ricevuto ServerFinish:", sf)
         assert sf and sf.get("type") == "ServerFinish", "Handshake fallito (ServerFinish)."
         iv2 = b64d(sf["iv"]); ct2 = b64d(sf["ct"])
         aad2 = sha256(b"server-finish" + info)
         pt2 = aesgcm.decrypt(iv2, ct2, aad2)
         assert pt2 == b"OK-SF", "Conferma server errata."
 
-        print("[client] Handshake OK. Canale sicuro attivo.")
+        logging.info("[client] Handshake OK. Canale sicuro attivo.")
 
         # =========================
         #  MESSAGGI APPLICATIVI
@@ -174,13 +181,13 @@ def run_client(host="127.0.0.1", port=5001):
             # Attende la risposta e la decifra
             resp = recv_json(sock)
             if not resp:
-                print("[client] Nessuna risposta (conn chiusa).")
+                logging.info("[client] Nessuna risposta (conn chiusa).")
                 return
             
             ivr = b64d(resp["iv"]); ctr = b64d(resp["ct"])
             aad_r = sha256(b"app|" + info + resp["seq"].to_bytes(8, "big") + b64d(resp["nonce"]))
             reply = AESGCM(K).decrypt(ivr, ctr, aad_r)
-            print("[client] Risposta:", reply.decode(errors="ignore"))
+            logging.info("[client] Risposta:", reply.decode(errors="ignore"))
 
         # Esempi:
         send_app(b"PING")
@@ -188,7 +195,7 @@ def run_client(host="127.0.0.1", port=5001):
         send_app(b"QUIT")  # chiede al server di chiudere la sessione
     finally:
         sock.close()
-        print("[client] Chiuso.")
+        logging.info("[client] Chiuso.")
 
 if __name__ == "__main__":
     run_client()

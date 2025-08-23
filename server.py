@@ -1,5 +1,12 @@
 import os, socket, json, sys # Librerie per utilizzare le utility di sistema, rete tcp, Json e gestione dei processi 
 from typing import Tuple #Per annotare i ritorni di funzioni 
+import logging 
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey 
 #chiavi per verificare e firmare, utili per l'autenticazione del server 
 
@@ -28,8 +35,6 @@ PRIV_PATH = os.path.join(KEYS_DIR, "server_signing_private.pem")
 PUB_PATH  = os.path.join(KEYS_DIR, "server_signing_public.pem")
 
 PROTO = b"DSS/1"  # protocol id per il transcript -> cioè tutti i messaggi scambianti durante l'handshake
-
-
 
 
 def ensure_server_signing_keys() -> Tuple[Ed25519PrivateKey, bytes]:
@@ -75,11 +80,11 @@ def ensure_server_signing_keys() -> Tuple[Ed25519PrivateKey, bytes]:
         with open(PUB_PATH, "wb") as f:
             f.write(pub_pem)
 
-        print("[server] Chiavi di firma generate.")
-        print("[server] Copia sul client il file:", PUB_PATH)
+        logging.info("[server] Chiavi di firma generate.")
+        logging.info("[server] Copia sul client il file:", PUB_PATH)
     else:
         # Keys already exist on disk, so reuse them
-        print("[server] Uso chiavi di firma esistenti.")
+        logging.info("[server] Uso chiavi di firma esistenti.")
 
     # Load private key object and public key bytes from files
     with open(PRIV_PATH, "rb") as f:
@@ -185,19 +190,19 @@ def run_server(host="127.0.0.1", port=5001):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((host, port))
     sock.listen(5)
-    print(f"[server] In ascolto su {host}:{port}")
+    logging.info(f"[server] In ascolto su {host}:{port}")
 
     try:
         while True:
             # 3) Accetta un client
             conn, addr = sock.accept()
-            print("[server] Connessione:", addr)
+            logging.info("[server] Connessione:", addr)
             try:
-                # --- HANDSHAKE ---
 
+                # --- HANDSHAKE ---
                 # Riceve ClientHello: deve contenere la chiave DH effimera e un nonce Nc
                 hello = recv_json(conn)
-                print("[server] Ricevuto ClientHello:", hello)
+                logging.info("[server] Ricevuto ClientHello:", hello)
                 if not hello or hello.get("type") != "ClientHello":
                     conn.close(); continue
 
@@ -227,7 +232,7 @@ def run_server(host="127.0.0.1", port=5001):
                     # Non serve inviare la chiave pubblica di firma (il client la ha offline)
                 }
                 send_json(conn, reply)
-                print("[server] Inviato ServerHello:", reply)
+                logging.info("[server] Inviato ServerHello:", reply)
 
                 # Deriva chiave di sessione con HKDF(shared, salt=Nc||Ns, info=hash(transcript))
                 salt = Nc + Ns
@@ -237,7 +242,7 @@ def run_server(host="127.0.0.1", port=5001):
 
                 # Riceve ClientFinish cifrato: serve a confermare che il client conosce K
                 cf = recv_json(conn)
-                print("[server] Ricevuto ClientFinish:", cf)
+                logging.info("[server] Ricevuto ClientFinish:", cf)
                 if not cf or cf.get("type") != "ClientFinish":
                     conn.close(); continue
 
@@ -249,7 +254,7 @@ def run_server(host="127.0.0.1", port=5001):
                     if pt != b"OK-CF":
                         raise ValueError("bad confirm")
                 except Exception:
-                    print("[server] Conferma client fallita, chiudo.")
+                    logging.info("[server] Conferma client fallita, chiudo.")
                     conn.close(); continue
 
                 # Invia ServerFinish: conferma lato server della chiave
@@ -257,7 +262,7 @@ def run_server(host="127.0.0.1", port=5001):
                 aad2 = sha256(b"server-finish" + info)
                 ct2 = aesgcm.encrypt(iv2, b"OK-SF", aad2)
                 send_json(conn, {"type": "ServerFinish", "iv": b64e(iv2), "ct": b64e(ct2)})
-                print("[server] Handshake completato. Canale sicuro attivo.")
+                logging.info("[server] Handshake completato. Canale sicuro attivo.")
 
                 # --- LOOP APPLICATIVO ---
                 last_seq = 0           # ultimo seq visto (per controllare ordine)
@@ -285,9 +290,9 @@ def run_server(host="127.0.0.1", port=5001):
                     aad = sha256(b"app|" + info + seq.to_bytes(8, "big") + nonce_app)
                     try:
                         plaintext = AESGCM(K).decrypt(iv, ct, aad)
-                        print("[server] Messaggio applicativo ricevuto:", plaintext)
+                        logging.info("[server] Messaggio applicativo ricevuto:", plaintext)
                     except Exception:
-                        print("[server] AEAD decrypt fallita.")
+                        logging.info("[server] AEAD decrypt fallita.")
                         continue
 
                     # Logica applicativa base (esempio)
@@ -319,11 +324,11 @@ def run_server(host="127.0.0.1", port=5001):
                 conn.close()
 
     except KeyboardInterrupt:
-        print("\n[server] Stop richiesto.")
+        logging.info("\n[server] Stop richiesto.")
     finally:
         # Chiude il socket principale
         sock.close()
-        print("[server] Chiuso.")
+        logging.info("[server] Chiuso.")
 
 
 if __name__ == "__main__":
