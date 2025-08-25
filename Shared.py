@@ -1,5 +1,9 @@
-import base64, json, os, struct, hashlib
+import base64, json, os, struct, hashlib, time
 from typing import Optional
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF 
+#per derivare la chiave di sessione prende in input un segreto iniziale un salt e i metadati e deriviamo la chiave per la cifratura simmetrica 
+
+from cryptography.hazmat.primitives import hashes
 
 # ---------- Base64 helpers ----------
 
@@ -150,3 +154,37 @@ def sha256(data: bytes) -> bytes:
         - Returns raw bytes (not hex) for direct use in cryptographic operations.
     """
     return hashlib.sha256(data).digest()
+
+def hkdf_derive(shared_secret: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
+    """
+    Derive a symmetric session key from a Diffie-Hellman shared secret using HKDF-SHA256.
+
+    Args:
+        shared_secret (bytes): Raw ECDH secret (e.g., X25519 .exchange()).
+        salt (bytes): Per-session salt. Here we use Nc||Ns (client/server nonces) to ensure uniqueness
+                      across sessions (defense-in-depth even if DH repeated, and for better extractor entropy).
+        info (bytes): Context-binding string. Here we pass hash(transcript) to cryptographically bind the key
+                      to the exact handshake parameters (protocol id, DH pubs, nonces), preventing cross-protocol reuse.
+        length (int): Desired key length in bytes. Default 32 (suitable for AES-256-GCM).
+
+    Returns:
+        bytes: A pseudo-random key of 'length' bytes, suitable for symmetric crypto (e.g., AES-GCM).
+
+    Security notes:
+        - HKDF provides key-separation: changing either 'salt' or 'info' yields independent keys.
+        - Using Nc||Ns as salt and hash(transcript) as info ties the key K to this specific session context.
+        - Keep 'length' aligned with the cipher key size (32 bytes for AES-256-GCM).
+    """
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=length,
+        salt=salt,
+        info=info
+    ).derive(shared_secret)
+
+
+# Funzioni helper per OpSec.py
+
+def _now_iso() -> str:
+    """Ritorna l'istante corrente in formato ISO UTC (utile per created_at)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

@@ -16,16 +16,11 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption, PublicFormat, load_pem_public_key, load_pem_private_key 
 #serve a serializzare e deserializzare le chiavi pem per salvarle e leggerle 
 
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF 
-#per derivare la chiave di sessione prende in input un segreto iniziale un salt e i metadati e deriviamo la chiave per la cifratura simmetrica 
-
-from cryptography.hazmat.primitives import hashes
-
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM 
 #cifrario AES GCM (consigliato da gpt) utilizza l'AES (quindi utile per creare la chiave simmetrica con cui cifrare il traffico), a
 #GCM (Galois/Counter Mode) trasforma la chiave simmetrica in un cifrario a flusso e integra un meccanismo di autenticazione perchè il CTR assicura confidenzialità, il campo di Galois viene utilizzato per creare un tag di autenticazione per assicurare integrità e autenticità
 
-from shared import b64e, b64d, send_json, recv_json, randbytes, sha256 #libreria con le utility in cui abbiamo il framing (utilizzato per impostare l'inizio e fine del messaggio), il nonce random e dove calcoliamo gli hash 
+from Shared import b64e, b64d, send_json, recv_json, randbytes, sha256, build_transcript, hkdf_derive #libreria con le utility in cui abbiamo il framing (utilizzato per impostare l'inizio e fine del messaggio), il nonce random e dove calcoliamo gli hash 
 #Directory per conservare le chiavi pubbliche e private del server 
 
 
@@ -35,6 +30,36 @@ PRIV_PATH = os.path.join(KEYS_DIR, "server_signing_private.pem")
 PUB_PATH  = os.path.join(KEYS_DIR, "server_signing_public.pem")
 
 PROTO = b"DSS/1"  # protocol id per il transcript -> cioè tutti i messaggi scambianti durante l'handshake
+
+def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes) -> bytes:
+    """
+    Build the handshake transcript that will be hashed and signed by the server to authenticate itself.
+
+    The transcript binds the session to:
+      - The protocol identity and version (PROTO),
+      - The ephemeral DH public keys (client_pub, server_pub),
+      - The nonces chosen by both sides (Nc, Ns).
+
+    This defeats man-in-the-middle and cross-protocol attacks by ensuring the signature is valid
+    only for this exact protocol/version and this exact pair of DH keys and nonces.
+
+    Args:
+        client_pub (bytes): Client's ephemeral X25519 public key (32 bytes, raw).
+        server_pub (bytes): Server's ephemeral X25519 public key (32 bytes, raw).
+        Nc (bytes): Client nonce (e.g., 16 bytes).
+        Ns (bytes): Server nonce (e.g., 16 bytes).
+
+    Returns:
+        bytes: Canonical transcript bytes. These bytes should then be hashed (e.g., SHA-256)
+               and signed with the server's long-term Ed25519 private key.
+
+    Implementation note:
+        We use a fixed field order to avoid ambiguity: PROTO | client_pub | server_pub | Nc | Ns.
+        Because these fields have fixed size (except PROTO which is constant), this simple '|' join is safe here.
+        For future extensibility, prefer length-prefixed or a structured encoding (e.g., CBOR).
+    """
+    # Fixed order to prevent ambiguity, and to match the verification side byte-for-byte
+    return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
 
 
 def ensure_server_signing_keys() -> Tuple[Ed25519PrivateKey, bytes]:
@@ -93,65 +118,6 @@ def ensure_server_signing_keys() -> Tuple[Ed25519PrivateKey, bytes]:
         server_pub_pem = f.read()
 
     return sk, server_pub_pem
-
-
-def hkdf_derive(shared_secret: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
-    """
-    Derive a symmetric session key from a Diffie-Hellman shared secret using HKDF-SHA256.
-
-    Args:
-        shared_secret (bytes): Raw ECDH secret (e.g., X25519 .exchange()).
-        salt (bytes): Per-session salt. Here we use Nc||Ns (client/server nonces) to ensure uniqueness
-                      across sessions (defense-in-depth even if DH repeated, and for better extractor entropy).
-        info (bytes): Context-binding string. Here we pass hash(transcript) to cryptographically bind the key
-                      to the exact handshake parameters (protocol id, DH pubs, nonces), preventing cross-protocol reuse.
-        length (int): Desired key length in bytes. Default 32 (suitable for AES-256-GCM).
-
-    Returns:
-        bytes: A pseudo-random key of 'length' bytes, suitable for symmetric crypto (e.g., AES-GCM).
-
-    Security notes:
-        - HKDF provides key-separation: changing either 'salt' or 'info' yields independent keys.
-        - Using Nc||Ns as salt and hash(transcript) as info ties the key K to this specific session context.
-        - Keep 'length' aligned with the cipher key size (32 bytes for AES-256-GCM).
-    """
-    return HKDF(
-        algorithm=hashes.SHA256(),
-        length=length,
-        salt=salt,
-        info=info
-    ).derive(shared_secret)
-
-
-def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes) -> bytes:
-    """
-    Build the handshake transcript that will be hashed and signed by the server to authenticate itself.
-
-    The transcript binds the session to:
-      - The protocol identity and version (PROTO),
-      - The ephemeral DH public keys (client_pub, server_pub),
-      - The nonces chosen by both sides (Nc, Ns).
-
-    This defeats man-in-the-middle and cross-protocol attacks by ensuring the signature is valid
-    only for this exact protocol/version and this exact pair of DH keys and nonces.
-
-    Args:
-        client_pub (bytes): Client's ephemeral X25519 public key (32 bytes, raw).
-        server_pub (bytes): Server's ephemeral X25519 public key (32 bytes, raw).
-        Nc (bytes): Client nonce (e.g., 16 bytes).
-        Ns (bytes): Server nonce (e.g., 16 bytes).
-
-    Returns:
-        bytes: Canonical transcript bytes. These bytes should then be hashed (e.g., SHA-256)
-               and signed with the server's long-term Ed25519 private key.
-
-    Implementation note:
-        We use a fixed field order to avoid ambiguity: PROTO | client_pub | server_pub | Nc | Ns.
-        Because these fields have fixed size (except PROTO which is constant), this simple '|' join is safe here.
-        For future extensibility, prefer length-prefixed or a structured encoding (e.g., CBOR).
-    """
-    # Fixed order to prevent ambiguity, and to match the verification side byte-for-byte
-    return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
 
 
 def run_server(host="127.0.0.1", port=5001):

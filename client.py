@@ -9,59 +9,41 @@ logging.basicConfig(
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.serialization import load_pem_public_key, Encoding, PublicFormat
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from shared import b64e, b64d, send_json, recv_json, randbytes, sha256
+from Shared import b64e, b64d, send_json, recv_json, randbytes, sha256, build_transcript, hkdf_derive
 
 SERVER_PUB_PATH = "keys/server_signing_public.pem"  # ricevuto offline
 PROTO = b"DSS/1"
 
-def hkdf_derive(shared_secret: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
-    """
-    Deriva una chiave simmetrica a partire da un segreto condiviso (es. da Diffie-Hellman X25519),
-    utilizzando HKDF con SHA-256 come funzione di derivazione.
-
-    Args:
-        shared_secret (bytes): segreto grezzo ottenuto dallo scambio ECDH (X25519.exchange()).
-        salt (bytes): valore casuale/salt per garantire unicità delle chiavi. 
-                      In questo protocollo è Nc||Ns (concatenazione dei nonce del client e del server).
-        info (bytes): stringa di contesto che lega la chiave a un protocollo/versione specifico.
-                      Qui si usa hash(transcript).
-        length (int): lunghezza della chiave in byte (default 32 = 256 bit per AES-256-GCM).
-
-    Returns:
-        bytes: chiave simmetrica derivata, da usare per cifratura/autenticazione.
-
-    Note:
-        - Usare HKDF garantisce che la chiave derivata sia uniforme e crittograficamente sicura.
-        - L'inclusione di salt e info assicura separazione tra sessioni diverse e previene attacchi cross-protocol.
-    """
-    return HKDF(algorithm=hashes.SHA256(), length=length, salt=salt, info=info).derive(shared_secret)
-
-
 def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes) -> bytes:
     """
-    Costruisce il transcript dell'handshake, che sarà hashato e firmato dal server (e verificato dal client).
-    Il transcript lega crittograficamente la sessione ai parametri negoziati,
-    prevenendo attacchi di tipo man-in-the-middle e cross-protocol.
+    Build the handshake transcript that will be hashed and signed by the server to authenticate itself.
+
+    The transcript binds the session to:
+      - The protocol identity and version (PROTO),
+      - The ephemeral DH public keys (client_pub, server_pub),
+      - The nonces chosen by both sides (Nc, Ns).
+
+    This defeats man-in-the-middle and cross-protocol attacks by ensuring the signature is valid
+    only for this exact protocol/version and this exact pair of DH keys and nonces.
 
     Args:
-        client_pub (bytes): chiave pubblica effimera X25519 del client (32 byte).
-        server_pub (bytes): chiave pubblica effimera X25519 del server (32 byte).
-        Nc (bytes): nonce casuale generato dal client (16 byte).
-        Ns (bytes): nonce casuale generato dal server (16 byte).
+        client_pub (bytes): Client's ephemeral X25519 public key (32 bytes, raw).
+        server_pub (bytes): Server's ephemeral X25519 public key (32 bytes, raw).
+        Nc (bytes): Client nonce (e.g., 16 bytes).
+        Ns (bytes): Server nonce (e.g., 16 bytes).
 
     Returns:
-        bytes: transcript canonico nella forma:
-               PROTO | client_pub | server_pub | Nc | Ns
+        bytes: Canonical transcript bytes. These bytes should then be hashed (e.g., SHA-256)
+               and signed with the server's long-term Ed25519 private key.
 
-    Note:
-        - PROTO è un identificatore costante del protocollo/versione (es. b"DSS/1").
-        - L'ordine e il formato dei campi devono essere identici lato client e lato server,
-          altrimenti la verifica della firma e la derivazione della chiave falliscono.
+    Implementation note:
+        We use a fixed field order to avoid ambiguity: PROTO | client_pub | server_pub | Nc | Ns.
+        Because these fields have fixed size (except PROTO which is constant), this simple '|' join is safe here.
+        For future extensibility, prefer length-prefixed or a structured encoding (e.g., CBOR).
     """
+    # Fixed order to prevent ambiguity, and to match the verification side byte-for-byte
     return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
 
 
