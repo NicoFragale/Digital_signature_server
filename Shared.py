@@ -188,3 +188,34 @@ def hkdf_derive(shared_secret: bytes, salt: bytes, info: bytes, length: int = 32
 def _now_iso() -> str:
     """Ritorna l'istante corrente in formato ISO UTC (utile per created_at)."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def build_transcript(client_pub: bytes, server_pub: bytes, Nc: bytes, Ns: bytes) -> bytes:
+    """
+    Build the handshake transcript that will be hashed and signed by the server to authenticate itself.
+
+    The transcript binds the session to:
+      - The protocol identity and version (PROTO),
+      - The ephemeral DH public keys (client_pub, server_pub),
+      - The nonces chosen by both sides (Nc, Ns).
+
+    This defeats man-in-the-middle and cross-protocol attacks by ensuring the signature is valid
+    only for this exact protocol/version and this exact pair of DH keys and nonces.
+
+    Args:
+        client_pub (bytes): Client's ephemeral X25519 public key (32 bytes, raw).
+        server_pub (bytes): Server's ephemeral X25519 public key (32 bytes, raw).
+        Nc (bytes): Client nonce (e.g., 16 bytes).
+        Ns (bytes): Server nonce (e.g., 16 bytes).
+
+    Returns:
+        bytes: Canonical transcript bytes. These bytes should then be hashed (e.g., SHA-256)
+               and signed with the server's long-term Ed25519 private key.
+
+    Implementation note:
+        We use a fixed field order to avoid ambiguity: PROTO | client_pub | server_pub | Nc | Ns.
+        Because these fields have fixed size (except PROTO which is constant), this simple '|' join is safe here.
+        For future extensibility, prefer length-prefixed or a structured encoding (e.g., CBOR).
+    """
+    # Fixed order to prevent ambiguity, and to match the verification side byte-for-byte
+    return b"|".join([PROTO, client_pub, server_pub, Nc, Ns])
