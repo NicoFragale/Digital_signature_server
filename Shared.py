@@ -2,7 +2,7 @@ import base64, json, os, struct, hashlib, time
 from typing import Optional
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF 
 #per derivare la chiave di sessione prende in input un segreto iniziale un salt e i metadati e deriviamo la chiave per la cifratura simmetrica 
-
+from server import PROTO
 from cryptography.hazmat.primitives import hashes
 
 # ---------- Base64 helpers ----------

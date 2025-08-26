@@ -1,0 +1,183 @@
+\section{Operazioni}
+
+\subsection{CreateKeys(\textit{username})}
+
+\paragraph{Che cosa fa}
+L’operazione ha lo scopo di generare e memorizzare in maniera sicura \emph{una sola coppia di chiavi Ed25519} per ogni utente. Se l’utente ha già una chiave attiva, non ne viene creata un’altra, ma vengono restituiti i metadati della chiave esistente: questa caratteristica prende il nome di \textbf{idempotenza}. In questo modo si evita di avere più chiavi diverse per lo stesso utente, rendendo il sistema più semplice e coerente.
+
+\paragraph{Formati e terminologia}
+\begin{itemize}
+  \item \textbf{Formato grezzo (raw)}: con questo termine si intende la rappresentazione binaria minima della chiave, senza intestazioni o metadati aggiuntivi. Per Ed25519 la chiave pubblica è sempre lunga 32 byte, e questa sequenza di 32 byte è ciò che si intende con formato ``grezzo''.
+  \item \textbf{IV univoco (Initialization Vector)}: è un valore casuale di 12 byte che viene usato ogni volta che si cifra la chiave privata con \emph{AES-GCM}. Serve a garantire che anche cifrando lo stesso dato due volte si ottengano risultati sempre diversi, evitando pattern ripetuti.
+  \item \textbf{Blob cifrato}: con questo termine si indica il risultato della cifratura, ovvero un blocco di byte che contiene sia il testo cifrato sia il tag di autenticazione generato da AES-GCM. Non è un termine strettamente tecnico formale, ma in gergo informatico viene usato per riferirsi a ``un blocco opaco di dati binari''.
+\end{itemize}
+
+\paragraph{Il record salvato}
+Il risultato della creazione viene salvato in un file JSON contenente tutte le informazioni necessarie. Un esempio semplificato è:
+
+\begin{verbatim}
+{
+  "key_id": "<identificativo_univoco_della_chiave>",
+  "username": "<nome_utente>",
+  "algo": "ed25519",
+  "public_key_b64": "<chiave_pubblica_in_base64>",
+  "enc_priv_key_b64": "<chiave_privata_cifrata_in_base64>",
+  "nonce_b64": "<iv_usato_per_la_cifratura_in_base64>",
+  "created_at": "<timestamp_ISO_8601_di_creazione>",
+  "status": "active"
+}
+\end{verbatim}
+
+Qui si vede l’identificativo della chiave, l’algoritmo, la chiave pubblica codificata in Base64, la chiave privata cifrata (anch’essa in Base64), l’IV usato per la cifratura, la data di creazione e lo stato della chiave.
+
+\paragraph{Persistenza atomica}
+Il salvataggio viene fatto in modo da evitare file corrotti. La tecnica corretta e tecnica si chiama \textbf{scrittura atomica}: si scrive prima su un file temporaneo e solo quando la scrittura è andata a buon fine il file temporaneo viene rinominato al posto di quello vero. Questo assicura che sul disco ci sia sempre o la vecchia versione o la nuova, mai un file interrotto a metà.
+
+\paragraph{Aggiornamento dell’indice}
+Oltre al file della chiave, esiste un file di indice per utente (\texttt{index.json}), che serve a sapere qual è la chiave predefinita. Dopo la creazione viene aggiornato così:
+
+\begin{verbatim}
+{
+  "default_key_id": "ed25519-20250825-1a2b",
+  "registration_locked": false
+}
+\end{verbatim}
+
+\paragraph{Perché questo approccio funziona}
+L’insieme di queste scelte porta a un sistema robusto:
+\begin{itemize}
+  \item L’\textbf{idempotenza} garantisce che ogni utente abbia sempre e solo una chiave attiva: non si rischia di moltiplicare chiavi per errore.
+  \item La \textbf{cifratura con AEAD} (AES-GCM) protegge la confidenzialità della chiave privata e allo stesso tempo assicura che i dati cifrati non possano essere modificati senza essere scoperti, grazie al tag di autenticazione.
+  \item La \textbf{persistenza atomica} elimina il rischio di avere file incompleti o corrotti in caso di interruzioni improvvise (crash, power off).
+  \item L’\textbf{indice utente} mantiene sempre chiara la chiave attiva da usare, semplificando le operazioni successive.
+\end{itemize}
+
+\paragraph{Confronto con approcci più deboli}
+\begin{itemize}
+  \item Salvare la chiave privata \textbf{in chiaro} su disco sarebbe molto più semplice, ma significherebbe che chiunque abbia accesso al file system può rubare le chiavi e firmare documenti come se fosse l’utente.
+  \item Usare una modalità di cifratura non AEAD, come \textit{AES-CBC}, garantirebbe la riservatezza ma non l’integrità: un attaccante potrebbe manipolare il file cifrato senza che l’alterazione venga rilevata.
+  \item Scrivere i file direttamente, senza meccanismi atomici, può lasciare file tronchi o indici incoerenti se il programma viene interrotto durante la scrittura.
+\end{itemize}
+
+\clearpage
+\paragraph{Schema del flusso}
+\begin{verbatim}
+             +----------------------+
+             |  Richiesta CreateKeys |
+             +----------+-----------+
+                        |
+                        v
+           +--------------------------+
+           | Esiste chiave attiva?    |
+           +-----------+--------------+
+                       | sì
+                       v
+            Ritorna metadati esistenti
+                       |
+                       | no
+                       v
+        +-------------------------------+
+        | Genera nuova coppia Ed25519   |
+        |  - public_key (32B raw)       |
+        |  - private_key (32B raw)      |
+        +-------------------------------+
+                       |
+                       v
+        +------------------------------------+
+        | Cifra private_key con AES-GCM       |
+        |  - usa master key (32B)             |
+        |  - genera IV (nonce) 12B            |
+        |  - ottieni blob cifrato + tag AEAD  |
+        +------------------------------------+
+                       |
+                       v
+        +-------------------------------+
+        | Compila record JSON            |
+        |  { key_id, username, algo,     |
+        |    public_key_b64, enc_priv,   |
+        |    nonce, created_at, status } |
+        +-------------------------------+
+                       |
+                       v
+        +-----------------------------------+
+        | Salva record con scrittura atomica|
+        | Aggiorna index.json               |
+        +-----------------------------------+
+
+\end{verbatim}
+
+\clearpage
+\subsection{SignDoc(\textit{auth\_user}, \textit{doc\_path})}
+
+L'operazione \texttt{SignDoc} firma il digest del documento indicato da \textit{doc\_path} con la chiave privata dell'utente \textit{auth\_user}. La chiave privata è conservata cifrata ``a riposo'' e viene decifrata solo in RAM per il tempo strettamente necessario; si calcola quindi l'hash \emph{SHA-256} del file in streaming e si produce una firma \emph{Ed25519} ``detached'' salvata accanto al documento.
+
+\paragraph{Fasi operative }
+\begin{enumerate}
+  \item \textbf{Verifica preliminare del documento} — controlla che \textit{doc\_path} esista ed interrompe in caso contrario.
+  \item \textbf{Selezione dell'unica chiave attiva dell'utente} — individua il file-chiave dell'utente, lo carica e valida che sia presente.
+  \item \textbf{Decifratura della privata ``a riposo''} — carica la master key, inizializza \emph{AES-GCM} e decifra il blob della privata usando \textit{nonce\_b64} e \textit{enc\_priv\_key\_b64}; il tag AEAD garantisce integrità.
+  \item \textbf{Ricostruzione della chiave Ed25519} — crea l'oggetto chiave privata a partire dai 32 byte grezzi.
+  \item \textbf{Hash del documento in streaming} — calcola \emph{SHA-256} leggendo il file a blocchi (supporto a file grandi), produce il digest e la sua codifica Base64 per l'output.
+  \item \textbf{Firma del digest} — applica \emph{Ed25519.sign} al digest e codifica la firma in Base64.
+  \item \textbf{Emissione della firma ``detached''} — scrive \texttt{<doc>.sig} con metadati minimi (utente, \textit{key\_id}, algoritmo, hash e firma) per facilitare verifiche senza alterare il documento.
+  \item \textbf{Ritorno metadati} — restituisce al chiamante hash, firma e percorso della firma per audit e verifica.
+\end{enumerate}
+
+\newpage
+\paragraph{Schema del flusso}
+
+\begin{verbatim}
+doc_path (file)        keystore/<user>/key.json
+      |                         |
+      | open+stream SHA-256     | load record (nonce_b64, enc_priv_key_b64)
+      v                         v
+  [doc_hash]   <---  AES-GCM.decrypt (master key, IV/nonce, tag)
+                        |
+                        v
+                ricostruisci Ed25519 sk
+                        |
+                        v
+                  sign(doc_hash)
+                        |
+                        v
+          scrivi firma detached: <doc_path>.sig
+\end{verbatim}
+
+\clearpage
+\subsection{GetPublicKey(\textit{target\_user}, \textit{key\_id opzionale})}
+
+\texttt{GetPublicKey} restituisce la \emph{chiave pubblica} dell'utente richiesto, nel modello ``una sola coppia per utente''. Se viene passato un \textit{key\_id}, la funzione verifica che coincida con l'unico record presente; in caso contrario segnala errore. L'output è minimale e sufficiente alla verifica: identificativo, algoritmo e pubblica in Base64.
+
+\paragraph{Fasi operative (con riferimenti alle righe)}
+\begin{enumerate}
+  \item \textbf{Individuazione del record dell'utente} — elenca i file-chiave dell'utente e fallisce se non ne trova.
+  \item \textbf{Caricamento del record} — apre il JSON della chiave individuata e lo deserializza in memoria.
+  \item \textbf{Verifica di stato} — accetta solo chiavi con stato \textit{active}; altrimenti segnala \texttt{KeyNotFound}.
+  \item \textbf{Validazione opzionale di \textit{key\_id}} — se fornito, deve coincidere con l'identificativo effettivo del record; in caso contrario errore coerente.
+  \item \textbf{Costruzione risposta minimale} — prepara e restituisce \{\texttt{key\_id}, \texttt{algo}, \texttt{public\_key\_b64}\} e registra l'esito nei log.
+\end{enumerate}
+
+\paragraph{Schema del flusso}
+\begin{verbatim}
+target_user
+    |
+    v
+list key files  --(none)--> errore: KeyNotFound
+    |
+    v
+open & parse record JSON
+    |
+    +--(status != active)--> errore: KeyNotFound
+    |
+    +--(key_id passato e != actual_id)--> errore: KeyNotFound
+    |
+    v
+{ key_id, algo, public_key_b64 }  --> return
+\end{verbatim}
+
+\clearpage
+\subsection{DeleteKeys(\textit{auth\_user})}
+L'operazione consente al proprietario autenticato di eliminare la propria chiave. La funzione individua l'unico record-chiave dell'utente; se assente, segnala esplicitamente l'errore. In presenza del record, ne rileva l'identificativo e procede alla rimozione fisica del file dal keystore, adottando un approccio di \emph{hard delete} per minimizzare la superficie d'attacco in caso di compromissione del disco. Successivamente aggiorna l'indice impostando l'assenza di chiave predefinita e abilitando un blocco di registrazione (\textit{registration\_locked}) fino a una nuova procedura controllata (una nuova fase di registrazione offline).
+
+La persistenza delle modifiche all'indice avviene in modo \emph{atomico}, preservando l'invariante tra stato logico e contenuto del filesystem anche in presenza di interruzioni.
+
