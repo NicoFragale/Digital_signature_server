@@ -1,8 +1,6 @@
-import os, socket, json, sys, time  # Librerie per utilizzare le utility di sistema, rete tcp, Json e gestione dei processi 
+import os, socket, json, sys, time, logging, base64, shutil  # Librerie per utilizzare le utility di sistema, rete tcp, Json e gestione dei processi 
 from typing import Tuple #Per annotare i ritorni di funzioni 
-import logging 
-import base64  # Per codificare e decodificare in base64 (utile per trasmettere dati binari in json)
-from accounts_auth import verify_login, change_password
+from accounts_auth import verify_login, change_password, verify_username
 from OpSec import CreateKeys, GetPublicKey, SignDoc, DeleteKeys
 logging.basicConfig(
     level=logging.INFO,
@@ -158,7 +156,7 @@ def run_server(host="127.0.0.1", port=5001):
     sock.bind((host, port))
     sock.listen(5)
     logging.info(f"[server] In ascolto su {host}:{port}")
-
+    terminate_server = False  
     try:
         while True:
             # 3) Accetta un client
@@ -247,6 +245,7 @@ def run_server(host="127.0.0.1", port=5001):
                 auth_deadline = time.monotonic() + AUTH_TIMEOUT  # scadenza della fase auth
 
                 # --- LOOP APPLICATIVO ---
+                close_after_reply = False
                 last_seq = srv_seq            # abbiamo già usato seq=1 dal server
                 seen_nonces = {srv_nonce}     # nonce già usato nel primo messaggio
 
@@ -296,7 +295,12 @@ def run_server(host="127.0.0.1", port=5001):
                             if op == "AUTH_USERNAME":
                                 pending_user = str(obj.get("username", "")).strip()
                                 auth_deadline = time.monotonic() + AUTH_TIMEOUT
-                                body = {"op": "AUTH_NEED_PASSWORD"}
+                                vr = verify_username(pending_user, client_ip=str(addr[0]) if isinstance(addr, tuple) else None)
+                                logging.info(f"[server] Verifica username '{pending_user}': {vr}")
+                                if not vr.get("ok"):
+                                    body = {"op": "AUTH_FAIL", "error": vr.get("error", "UserNotFound")}
+                                else:
+                                    body = {"op": "AUTH_NEED_PASSWORD"}
                                 resp_bytes = json.dumps(body).encode("utf-8")
 
                             elif op == "AUTH_PASSWORD":
@@ -335,7 +339,7 @@ def run_server(host="127.0.0.1", port=5001):
                                         body = {"op":"AUTH_FAIL","error":str(e)}
                                 resp_bytes = json.dumps(body).encode("utf-8")
                              # === OPSEC OPERATIONS (richiedono utente autenticato) ===
-                             
+
                             elif op == "CreateKeys":
                                 if not authed_user:
                                     resp_bytes = json.dumps({"status":"ERR","error":"NotAuthenticated"}).encode("utf-8")
@@ -388,7 +392,21 @@ def run_server(host="127.0.0.1", port=5001):
                                 else:
                                     try:
                                         out = DeleteKeys(authed_user)
-                                        resp_bytes = json.dumps({"op":"DeleteKeys_OK", **out}).encode("utf-8")
+                                        user_dir = os.path.join("keystore", authed_user)
+                                        try:
+                                            shutil.rmtree(user_dir)
+                                            logging.info("[server] Rimossa cartella utente: %s", user_dir)
+                                        except FileNotFoundError:
+                                            logging.info("[server] Cartella utente non presente (già rimossa?): %s", user_dir)
+
+                                        # 2) prepara risposta e imposta chiusura sessione
+                                        resp_bytes = json.dumps({
+                                            "op": "DeleteKeys_OK",
+                                            **out,
+                                            "session": "closing"
+                                        }).encode("utf-8")
+                                        close_after_reply = True  # <<<<< dopo aver risposto, chiudi
+
                                     except FileNotFoundError:
                                         resp_bytes = json.dumps({"status":"ERR","error":"KeyNotFound"}).encode("utf-8")
                                     except Exception as e:
@@ -408,18 +426,20 @@ def run_server(host="127.0.0.1", port=5001):
                         "ct": b64e(ctr),
                         "nonce": b64e(nonce_app)
                     })
-
+                    if close_after_reply:
+                        logging.info("[server] DeleteKeys completato: chiudo la sessione.")
+                        terminate_server = True
                     # Se il messaggio era QUIT, chiudiamo la connessione
                     if plaintext == b"QUIT":
-                        conn.close()
-                    
+                       terminate_server = True
 
             finally:
-                # Assicura la chiusura della connessione client
                 conn.close()
-
-    except KeyboardInterrupt:
-        logging.info("\n[server] Stop richiesto.")
+            if terminate_server:
+                logging.info("[server] Chiusura server richiesta.")
+                break
+    #except KeyboardInterrupt:
+        #logging.info("\n[server] Stop richiesto.")
     finally:
         # Chiude il socket principale
         sock.close()

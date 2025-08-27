@@ -203,13 +203,11 @@ def run_client(host="127.0.0.1", port=5001):
         # =========================
         def menu():
             print("\n== Menu ==")
-            print("1) WHOAMI")
-            print("2) CreateKeys")
-            print("3) GetPublicKey")
-            print("4) SignDoc")
-            print("5) DeleteKeys")
-            print("6) PING")
-            print("7) QUIT (chiudi server)")
+            print("1) CreateKeys")
+            print("2) GetPublicKey")
+            print("3) SignDoc")
+            print("4) DeleteKeys")
+            print("5) QUIT (chiudi server)")
             print("0) Esci client")
             return input("Scelta: ").strip()
 
@@ -238,6 +236,12 @@ def run_client(host="127.0.0.1", port=5001):
                 if conf == "yes":
                     out = send_op({"op": "DeleteKeys"})
                     print("DeleteKeys ->", out)
+                    if out is None:
+                        print("Connessione chiusa dal server.")
+                        break
+                    if out.get("session") == "closing":
+                        print("Il server ha chiuso la sessione dopo DeleteKeys.")
+                        break
                 else:
                     print("Annullato.")
 

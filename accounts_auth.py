@@ -6,6 +6,15 @@ from account import (
     derive, now_iso
 )
 
+def verify_username(username: str, client_ip: str= None) -> Dict[str, Any]:
+    username = sanitize_username(username)
+    try:  
+        p= index_path(username) 
+        idx= load_index(username)
+        return {"ok": True}
+    except FileNotFoundError:
+        return {"ok": False, "error": "UserNotFound"}
+
 def verify_login(username: str, password: str, client_ip: str = None) -> Dict[str, Any]:
     username = sanitize_username(username)
     p = index_path(username)
@@ -13,7 +22,7 @@ def verify_login(username: str, password: str, client_ip: str = None) -> Dict[st
 
     if idx.get("locked"):
         return {"ok": False, "error": "Locked"}
-
+    
     if not idx.get("salt_b64") or not idx.get("hash_b64"):
         return {"ok": False, "error": "NoCredentials"}
 
