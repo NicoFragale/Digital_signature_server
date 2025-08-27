@@ -1,7 +1,9 @@
-import os, socket, json, sys # Librerie per utilizzare le utility di sistema, rete tcp, Json e gestione dei processi 
+import os, socket, json, sys, time  # Librerie per utilizzare le utility di sistema, rete tcp, Json e gestione dei processi 
 from typing import Tuple #Per annotare i ritorni di funzioni 
 import logging 
-
+import base64  # Per codificare e decodificare in base64 (utile per trasmettere dati binari in json)
+from accounts_auth import verify_login, change_password
+from OpSec import CreateKeys, GetPublicKey, SignDoc, DeleteKeys
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -20,7 +22,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 #cifrario AES GCM (consigliato da gpt) utilizza l'AES (quindi utile per creare la chiave simmetrica con cui cifrare il traffico), a
 #GCM (Galois/Counter Mode) trasforma la chiave simmetrica in un cifrario a flusso e integra un meccanismo di autenticazione perchè il CTR assicura confidenzialità, il campo di Galois viene utilizzato per creare un tag di autenticazione per assicurare integrità e autenticità
 
-from Shared import b64e, b64d, send_json, recv_json, randbytes, sha256, build_transcript, hkdf_derive, build_transcript #libreria con le utility in cui abbiamo il framing (utilizzato per impostare l'inizio e fine del messaggio), il nonce random e dove calcoliamo gli hash 
+from Shared import b64e, b64d, send_json, recv_json, randbytes, sha256, hkdf_derive #libreria con le utility in cui abbiamo il framing (utilizzato per impostare l'inizio e fine del messaggio), il nonce random e dove calcoliamo gli hash 
 #Directory per conservare le chiavi pubbliche e private del server 
 
 
@@ -161,13 +163,13 @@ def run_server(host="127.0.0.1", port=5001):
         while True:
             # 3) Accetta un client
             conn, addr = sock.accept()
-            logging.info("[server] Connessione:", addr)
+            logging.info("[server] Connessione: %s", addr)
             try:
 
                 # --- HANDSHAKE ---
                 # Riceve ClientHello: deve contenere la chiave DH effimera e un nonce Nc
                 hello = recv_json(conn)
-                logging.info("[server] Ricevuto ClientHello:", hello)
+                logging.info("[server] Ricevuto ClientHello: %s", hello)
                 if not hello or hello.get("type") != "ClientHello":
                     conn.close(); continue
 
@@ -197,7 +199,7 @@ def run_server(host="127.0.0.1", port=5001):
                     # Non serve inviare la chiave pubblica di firma (il client la ha offline)
                 }
                 send_json(conn, reply)
-                logging.info("[server] Inviato ServerHello:", reply)
+                logging.info("[server] Inviato ServerHello: %s", reply)
 
                 # Deriva chiave di sessione con HKDF(shared, salt=Nc||Ns, info=hash(transcript))
                 salt = Nc + Ns
@@ -207,7 +209,7 @@ def run_server(host="127.0.0.1", port=5001):
 
                 # Riceve ClientFinish cifrato: serve a confermare che il client conosce K
                 cf = recv_json(conn)
-                logging.info("[server] Ricevuto ClientFinish:", cf)
+                logging.info("[server] Ricevuto ClientFinish: %s", cf)
                 if not cf or cf.get("type") != "ClientFinish":
                     conn.close(); continue
 
@@ -228,10 +230,25 @@ def run_server(host="127.0.0.1", port=5001):
                 ct2 = aesgcm.encrypt(iv2, b"OK-SF", aad2)
                 send_json(conn, {"type": "ServerFinish", "iv": b64e(iv2), "ct": b64e(ct2)})
                 logging.info("[server] Handshake completato. Canale sicuro attivo.")
+                
+                # ===== Invia SUBITO AUTH_START (server-driven) =====
+                srv_seq = 0
+                srv_nonce = os.urandom(16)
+                iv0 = os.urandom(12)
+                aad0 = sha256(b"app|" + info + srv_seq.to_bytes(8, "big") + srv_nonce)
+                auth_start = json.dumps({"op": "AUTH_START"}).encode("utf-8")
+                ct0 = AESGCM(K).encrypt(iv0, auth_start, aad0)
+                send_json(conn, {"seq": srv_seq, "nonce": b64e(srv_nonce), "iv": b64e(iv0), "ct": b64e(ct0)})
+
+                # --- STATO AUTENTICAZIONE (server-driven) ---
+                authed_user   = None     # utente autenticato (stringa) o None
+                pending_user  = None     # username ricevuto ma non ancora verificato
+                AUTH_TIMEOUT  = 30       # secondi
+                auth_deadline = time.monotonic() + AUTH_TIMEOUT  # scadenza della fase auth
 
                 # --- LOOP APPLICATIVO ---
-                last_seq = 0           # ultimo seq visto (per controllare ordine)
-                seen_nonces = set()    # nonces già usati (per anti-replay)
+                last_seq = srv_seq            # abbiamo già usato seq=1 dal server
+                seen_nonces = {srv_nonce}     # nonce già usato nel primo messaggio
 
                 while True:
                     msg = recv_json(conn)
@@ -249,30 +266,142 @@ def run_server(host="127.0.0.1", port=5001):
                     if nonce_app in seen_nonces:
                         continue
                     seen_nonces.add(nonce_app)
+                    
+                    logging.info("[server] Ricevuto ct=%s iv=%s", base64.b64encode(ct).decode(), base64.b64encode(iv).decode())
 
                     # Decifra il messaggio applicativo con AES-GCM
                     iv = b64d(msg["iv"]); ct = b64d(msg["ct"])
                     aad = sha256(b"app|" + info + seq.to_bytes(8, "big") + nonce_app)
                     try:
                         plaintext = AESGCM(K).decrypt(iv, ct, aad)
-                        logging.info("[server] Messaggio applicativo ricevuto:", plaintext)
+                        logging.info("[server] Messaggio applicativo ricevuto: %s", plaintext)
                     except Exception:
                         logging.info("[server] AEAD decrypt fallita.")
                         continue
 
-                    # Logica applicativa base (esempio)
-                    if plaintext == b"PING":
-                        resp = b"PONG"
-                    elif plaintext == b"QUIT":
-                        resp = b"BYE"
-                        # invio risposta e poi chiudo
+                    # --- LOGICA APPLICATIVA (server-driven auth: username + password) ---
+                    resp_bytes = b""
+                    if authed_user is None and time.monotonic() > auth_deadline:
+                        body = {"op": "AUTH_TIMEOUT"}
+                        resp_bytes = json.dumps(body).encode("utf-8")
                     else:
-                        # placeholder: qui andranno Login, CreateKeys, SignDoc, ecc.
-                        resp = b"ECHO:" + plaintext
+                        try:
+                            obj = json.loads(plaintext.decode("utf-8"))
+                        except Exception:
+                            obj = None
 
+                        if isinstance(obj, dict) and "op" in obj:
+                            op = obj.get("op")
+
+                            if op == "AUTH_USERNAME":
+                                pending_user = str(obj.get("username", "")).strip()
+                                auth_deadline = time.monotonic() + AUTH_TIMEOUT
+                                body = {"op": "AUTH_NEED_PASSWORD"}
+                                resp_bytes = json.dumps(body).encode("utf-8")
+
+                            elif op == "AUTH_PASSWORD":
+                                if not pending_user:
+                                    body = {"op": "AUTH_FAIL", "error": "BadFlow"}
+                                else:
+                                    try:
+                                        client_ip = str(addr[0]) if isinstance(addr, tuple) else None
+                                        vr = verify_login(pending_user, str(obj.get("password", "")), client_ip=client_ip)
+                                        if not vr.get("ok"):
+                                            body = {"op": "AUTH_FAIL", "error": vr.get("error", "BadCredentials")}
+                                        else:
+                                            authed_user = pending_user
+                                            pending_user = None
+                                            if vr.get("needs_pw_change"):
+                                                body = {"op": "AUTH_NEED_PWCHANGE"}
+                                            else:
+                                                body = {"op": "AUTH_OK", "user": authed_user}
+                                    except FileNotFoundError:
+                                        body = {"op": "AUTH_FAIL", "error": "BadCredentials"}
+                                    except Exception as e:
+                                        body = {"op": "AUTH_FAIL", "error": str(e)}
+                                resp_bytes = json.dumps(body).encode("utf-8")
+
+                            elif op == "AUTH_SET_NEWPASS":
+                                u    = str(obj.get("username", "")).strip()
+                                oldp = str(obj.get("old_password", ""))
+                                newp = str(obj.get("new_password", ""))
+                                if authed_user is None or authed_user != u:
+                                    body = {"op": "AUTH_FAIL", "error": "NotAuthenticated"}
+                                else:
+                                    try:
+                                        cr = change_password(u, oldp, newp)
+                                        body = {"op":"AUTH_OK","user":authed_user} if cr.get("ok") else {"op":"AUTH_FAIL","error":cr.get("error","Fail")}
+                                    except Exception as e:
+                                        body = {"op":"AUTH_FAIL","error":str(e)}
+                                resp_bytes = json.dumps(body).encode("utf-8")
+                             # === OPSEC OPERATIONS (richiedono utente autenticato) ===
+                             
+                            elif op == "CreateKeys":
+                                if not authed_user:
+                                    resp_bytes = json.dumps({"status":"ERR","error":"NotAuthenticated"}).encode("utf-8")
+                                else:
+                                    try:
+                                        out = CreateKeys(authed_user)
+                                        resp_bytes = json.dumps({"op":"CreateKeys_OK", **out}).encode("utf-8")
+                                    except FileNotFoundError:
+                                        resp_bytes = json.dumps({"status":"ERR","error":"KeyNotFound"}).encode("utf-8")
+                                    except Exception as e:
+                                        resp_bytes = json.dumps({"status":"ERR","error":str(e)}).encode("utf-8")
+
+                            elif op == "GetPublicKey":
+                                # target_user è obbligatorio; key_id è opzionale
+                                if not authed_user:
+                                    resp_bytes = json.dumps({"status":"ERR","error":"NotAuthenticated"}).encode("utf-8")
+                                else:
+                                    target = str(obj.get("target_user","")).strip()
+                                    key_id = obj.get("key_id")
+                                    if not target:
+                                        resp_bytes = json.dumps({"status":"ERR","error":"Missing target_user"}).encode("utf-8")
+                                    else:
+                                        try:
+                                            out = GetPublicKey(target, key_id)
+                                            resp_bytes = json.dumps({"op":"GetPublicKey_OK", **out}).encode("utf-8")
+                                        except FileNotFoundError:
+                                            resp_bytes = json.dumps({"status":"ERR","error":"KeyNotFound"}).encode("utf-8")
+                                        except Exception as e:
+                                            resp_bytes = json.dumps({"status":"ERR","error":str(e)}).encode("utf-8")
+
+                            elif op == "SignDoc":
+                                if not authed_user:
+                                    resp_bytes = json.dumps({"status":"ERR","error":"NotAuthenticated"}).encode("utf-8")
+                                else:
+                                    doc_path = str(obj.get("doc_path","")).strip()
+                                    if not doc_path:
+                                        resp_bytes = json.dumps({"status":"ERR","error":"Missing doc_path"}).encode("utf-8")
+                                    else:
+                                        try:
+                                            out = SignDoc(authed_user, doc_path)
+                                            resp_bytes = json.dumps({"op":"SignDoc_OK", **out}).encode("utf-8")
+                                        except FileNotFoundError as e:
+                                            resp_bytes = json.dumps({"status":"ERR","error":str(e)}).encode("utf-8")
+                                        except Exception as e:
+                                            resp_bytes = json.dumps({"status":"ERR","error":str(e)}).encode("utf-8")
+
+                            elif op == "DeleteKeys":
+                                if not authed_user:
+                                    resp_bytes = json.dumps({"status":"ERR","error":"NotAuthenticated"}).encode("utf-8")
+                                else:
+                                    try:
+                                        out = DeleteKeys(authed_user)
+                                        resp_bytes = json.dumps({"op":"DeleteKeys_OK", **out}).encode("utf-8")
+                                    except FileNotFoundError:
+                                        resp_bytes = json.dumps({"status":"ERR","error":"KeyNotFound"}).encode("utf-8")
+                                    except Exception as e:
+                                        resp_bytes = json.dumps({"status":"ERR","error":str(e)}).encode("utf-8")
+                            else:
+                                if not authed_user:
+                                    resp_bytes = json.dumps({"status":"ERR","error":"NotAuthenticated"}).encode("utf-8")
+                                else:
+                                    resp_bytes = json.dumps({"status":"OK","echo":obj,"user":authed_user}).encode("utf-8")
+                        
                     # Invia la risposta cifrata
                     ivr = os.urandom(12)
-                    ctr = AESGCM(K).encrypt(ivr, resp, aad)
+                    ctr = AESGCM(K).encrypt(ivr, resp_bytes, aad)
                     send_json(conn, {
                         "seq": seq,
                         "iv": b64e(ivr),
@@ -282,7 +411,8 @@ def run_server(host="127.0.0.1", port=5001):
 
                     # Se il messaggio era QUIT, chiudiamo la connessione
                     if plaintext == b"QUIT":
-                        break
+                        conn.close()
+                    
 
             finally:
                 # Assicura la chiusura della connessione client

@@ -2,7 +2,7 @@
   "algo": "ed25519",
   "doc_hash_b64": "LibtRb2Yd7BrKzzzgBB7+5LZJsVaklfAcGwb0LvKC9s=",
   "hash_alg": "sha256",
-  "key_id": "ed25519-20250825-3119",
-  "signature_b64": "kXor22E3WzQVNqDVtAqzmJ8bXpqm9G2RgaKpJEqaZRz9FeMJFWyy7xUlkaFYG+r2Qp+Bv5M1I9ageUoC5d7wAw==",
-  "username": "nico"
+  "key_id": "ed25519-20250827-eb92",
+  "signature_b64": "qNKu+LUe95YpzOIYcR6JDjHrntiteZi6Zx663jC3m13OjWot88WPEnwEVEnB3/yFRGsbIG3Hzv5aJ4ixT1KxCg==",
+  "username": "fede"
 }
