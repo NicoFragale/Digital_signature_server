@@ -9,7 +9,9 @@ import time                          # timestamp ISO e data per il key_id
 import base64                        # codifica/decodifica base64 per salvare byte binari in JSON
 import secrets                       # generazione sicura di nonce/identificatori
 import hashlib
-import logging                       # logging strutturato al posto di print
+import logging
+
+from Masterkey import load_master_key                       # logging strutturato al posto di print
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,22 +79,7 @@ def _load_master_key(path: str = DEFAULT_KEY_PATH) -> bytes:
     Legge la master key da `secrets/master.key` (Base64) e ritorna i 32 byte.
     Non crea nulla: il file deve già esistere.
     """
-    if not os.path.exists(path):
-        logging.warning(f"File master key non trovato: {path}")
-
-    try:
-        with open(path, "rb") as f:
-            data = f.read().strip()
-    except OSError as e:
-        logging.warning(f"Impossibile leggere {path}") 
-
-    try:
-        key = base64.b64decode(data, validate=True)
-    except Exception as e:
-        logging.warning(f"Contenuto non è Base64 valido in {path}") 
-
-    if len(key) != 32:
-        logging.warning(f"Chiave in {path} non è lunga 32 byte (trovati {len(key)})")
+    key = load_master_key("QuEST4_P4ssW0rD_e_S1CuR4_")
 
     return key
 

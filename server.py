@@ -246,7 +246,7 @@ def run_server(host="127.0.0.1", port=5001):
 
                 # --- LOOP APPLICATIVO ---
                 close_after_reply = False
-                last_seq = srv_seq            # abbiamo già usato seq=1 dal server
+                last_seq = srv_seq           
                 seen_nonces = {srv_nonce}     # nonce già usato nel primo messaggio
 
                 while True:
@@ -420,12 +420,14 @@ def run_server(host="127.0.0.1", port=5001):
                     # Invia la risposta cifrata
                     ivr = os.urandom(12)
                     ctr = AESGCM(K).encrypt(ivr, resp_bytes, aad)
+                    #print("Risposta server: seq=", seq, " iv=", ivr, " nonce=", nonce_app)
                     send_json(conn, {
                         "seq": seq,
                         "iv": b64e(ivr),
                         "ct": b64e(ctr),
                         "nonce": b64e(nonce_app)
                     })
+                    
                     if close_after_reply:
                         logging.info("[server] DeleteKeys completato: chiudo la sessione.")
                         terminate_server = True

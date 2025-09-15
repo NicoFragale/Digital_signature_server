@@ -112,6 +112,7 @@ def run_client(host="127.0.0.1", port=5001):
         def decrypt_reply(resp: dict) -> bytes:
             ivr = b64d(resp["iv"]); ctr = b64d(resp["ct"])
             aad_r = sha256(b"app|" + info + resp["seq"].to_bytes(8, "big") + b64d(resp["nonce"]))
+            #print("Messaggio server: seq=", resp["seq"], " iv=", ivr, " nonce=", b64d(resp["nonce"]))
             return aesgcm.decrypt(ivr, ctr, aad_r)
 
         def send_app(plaintext: bytes):
@@ -120,6 +121,7 @@ def run_client(host="127.0.0.1", port=5001):
             nonce_app = os.urandom(16)
             iv = os.urandom(12)
             aad_msg = sha256(b"app|" + info + seq.to_bytes(8, "big") + nonce_app)
+            #print("Risposta client: seq=", seq, " iv=", iv, " nonce=", nonce_app)
             ct = aesgcm.encrypt(iv, plaintext, aad_msg)
             send_json(sock, {"seq": seq, "nonce": b64e(nonce_app), "iv": b64e(iv), "ct": b64e(ct)})
             resp = recv_json(sock)
