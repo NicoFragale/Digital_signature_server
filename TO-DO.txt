@@ -1,6 +1,0 @@
-Giusto per ricordarci 
-PasswordPhrase: "QuEST4_P4ssW0rD_e_S1CuR4_"
-
-
-
-Scrypt 
