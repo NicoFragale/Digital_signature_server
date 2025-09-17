@@ -59,3 +59,20 @@ python3 server.py
 ### 2. Start the client
 
 python3 client.py
+
+---
+
+## 🧠 Authors
+
+- **[Range](https://github.com/NicoFragale)**
+- **[Ex0DiUs](https://github.com/Ed3f)**
+
+## 📚 Academic Info
+
+**Course:** Foundations of Cybersecurity
+**Program:** Master's Degree in Cybersecurity, University of Pisa  
+**Academic Year:** 2024/2025
+
+## 📜 License
+
+This project is intended for academic purposes. Please contact the authors for reuse or modification permissions.
